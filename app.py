@@ -10,6 +10,14 @@ Deploy on Render:  gunicorn app:app
 import os
 import pickle
 import numpy as np
+
+# Keep TensorFlow's internal thread pools small so it fits comfortably in
+# low-memory environments like Render's free tier.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "1")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
+
 from flask import Flask, request, jsonify, render_template_string
 
 # --------------------------------------------------------------------------
@@ -35,6 +43,15 @@ scaler = None
 if os.path.exists(SCALER_PATH):
     with open(SCALER_PATH, "rb") as f:
         scaler = pickle.load(f)
+
+# Warm the model up at import time (not on the first request). Keras/TF
+# lazily builds its computation graph on the very first call, which can
+# take long enough to trip a gunicorn worker timeout. Doing it once here,
+# during startup, means real requests are always fast.
+try:
+    model.predict(np.zeros((1, 10), dtype=float), verbose=0)
+except Exception as _warm_err:
+    print(f"Warm-up prediction failed (non-fatal): {_warm_err}")
 
 # Fallback: public summary statistics of the standard "Churn_Modelling.csv"
 # dataset (10,000 rows) this architecture is trained on, used only if no
